@@ -48,13 +48,26 @@ function fmtWhen(iso) {
 const fmtTime = iso => new Date(iso).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
 
 // ---------- State ----------
-const S = { me: null, plans: [], names: {}, blocked: [], filter: 'alle', query: '', unsub: null, qTimer: null, raf: null };
+const S = { unread: {}, me: null, plans: [], names: {}, blocked: [], filter: 'alle', query: '', unsub: null, qTimer: null, raf: null };
 async function loadNames(ids) {
   const need = [...new Set(ids)].filter(id => id && !(id in S.names));
   if (!need.length) return;
   try { (await api.profiles(need)).forEach(p => S.names[p.id] = p); } catch (e) { /* still render */ }
   need.forEach(id => { if (!(id in S.names)) S.names[id] = null; });
 }
+const unreadTotal = () => Object.values(S.unread).reduce((a, b) => a + Number(b), 0);
+async function refreshUnread() {
+  if (!window.api || !S.me) return;
+  try {
+    const rows = await api.unread(); S.unread = {}; rows.forEach(r => S.unread[r.plan_id] = Number(r.unread));
+    const n = unreadTotal(); document.title = n ? `(${n}) Wezy` : 'Wezy';
+    const b = document.querySelector('#tab-chats .badge');
+    if (n && !b) { const t = document.querySelector('#tab-chats'); if (t) t.insertAdjacentHTML('beforeend', `<span class="badge">${n > 99 ? '99+' : n}</span>`); }
+    else if (b) { if (n) b.textContent = n > 99 ? '99+' : n; else b.remove(); }
+  } catch (e) { }
+}
+setInterval(refreshUnread, 20000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshUnread(); });
 const nameOf = id => id === api.uid() ? (S.me ? S.me.name : 'Du') : (S.names[id] ? S.names[id].name : 'Unbekannt');
 
 // ---------- Router (#/route/param) ----------
@@ -83,6 +96,7 @@ async function renderInner() {
   a.classList.remove('enter'); void a.offsetWidth; a.classList.add('enter');
   setTimeout(() => a.classList.remove('enter'), 700);
   tabs(true, r.v);
+  if (r.v !== 'chat') refreshUnread();
   window.scrollTo(0, 0);
   try { await (V[r.v] || home)(r.p); } catch (e) { err(e); }
 }
@@ -91,7 +105,7 @@ function tabs(show, cur) {
   const T = [['home', 'Entdecken', P.home], ['play', 'Zocken', P.pad], ['create', '', P.plus], ['chats', 'Chats', P.chat], ['me', 'Profil', P.user]];
   t.innerHTML = `<div class="tabs-in">${T.map(([k, l, ic]) => k === 'create'
     ? `<a class="tab" href="#/create" aria-label="Plan erstellen"><span class="plus">${I(ic, 26, '#fff', 2.6)}</span></a>`
-    : `<a class="tab" href="#/${k}" ${cur === k || (k === 'chats' && cur === 'chat') ? 'aria-current="page"' : ''}>${I(ic, 22)}${l}</a>`).join('')}</div>`;
+    : `<a class="tab" id="tab-${k}" href="#/${k}" ${cur === k || (k === 'chats' && cur === 'chat') ? 'aria-current="page"' : ''}>${I(ic, 22)}${l}${k === 'chats' && unreadTotal() ? `<span class="badge">${unreadTotal() > 99 ? '99+' : unreadTotal()}</span>` : ''}</a>`).join('')}</div>`;
 }
 const topbar = (extra = '') => `<div class="top">${LOGO(34)}<span class="wm">wezy</span><span class="sp"></span>${extra}</div>`;
 const backbar = (extra = '') => `<div class="top"><button class="ib" id="bk" aria-label="Zurück">${I(P.back, 22)}</button><span class="sp"></span>${extra}</div>`;
@@ -279,13 +293,14 @@ async function chats() {
   const a = $('#app');
   a.innerHTML = topbar() + `<h1 class="big" style="font-size:28px;margin:6px 0 14px">Chats</h1><div class="card" style="height:80px;opacity:.3"></div>`;
   const plans = await api.myPlans();
+  await refreshUnread();
   const last = await api.lastMessages(plans.map(p => p.id)).catch(() => []);
   const lastBy = {}; last.forEach(m => { if (!lastBy[m.plan_id]) lastBy[m.plan_id] = m; });
   await loadNames(last.map(m => m.user_id));
   if (route().v !== 'chats') return;
   plans.sort((x, y) => new Date((lastBy[y.id] || y).created_at) - new Date((lastBy[x.id] || x).created_at));
   const lobbies = plans.filter(p => p.is_lobby), others = plans.filter(p => !p.is_lobby);
-  const row = p => { const m = lastBy[p.id]; return `<a class="sk" href="#/chat/${p.id}" style="flex-direction:row;align-items:center;gap:12px;text-decoration:none;color:inherit">${cic(p.category)}<div class="sp" style="min-width:0"><b style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.title)}</b><span class="mut" style="font-size:13px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${m ? esc(nameOf(m.user_id) + ': ' + m.body) : 'Noch keine Nachrichten'}</span></div>${m ? `<span class="fnt" style="font-size:12px">${fmtTime(m.created_at)}</span>` : ''}</a>`; };
+  const row = p => { const m = lastBy[p.id]; return `<a class="sk" href="#/chat/${p.id}" style="flex-direction:row;align-items:center;gap:12px;text-decoration:none;color:inherit">${cic(p.category)}<div class="sp" style="min-width:0"><b style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.title)}</b><span class="mut" style="font-size:13px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${m ? esc(nameOf(m.user_id) + ': ' + m.body) : 'Noch keine Nachrichten'}</span></div><div class="col" style="gap:4px;align-items:flex-end">${m ? `<span class="fnt" style="font-size:12px">${fmtTime(m.created_at)}</span>` : ''}${S.unread[p.id] ? `<span class="hc v" style="padding:2px 9px;font-size:12px">${S.unread[p.id]}</span>` : ''}</div></a>`; };
   a.innerHTML = topbar() + `<h1 class="big" style="font-size:28px;margin:6px 0 14px">Chats</h1>
   ${lobbies.length ? `<div class="sec">Deine Lobbys & Squads</div><div class="col">${lobbies.map(row).join('')}</div>` : ''}
   <div class="sec">Pläne</div><div class="col">${others.map(row).join('') || `<div class="card col" style="align-items:flex-start"><b>Noch keine Chats.</b><span class="mut">Tritt einem Plan bei oder erstell einen. Dann öffnet sich hier der Gruppenchat.</span><a class="btn p" href="#/home" style="text-decoration:none">Pläne entdecken</a></div>`}</div>`;
@@ -300,7 +315,7 @@ async function chat(id) {
   await loadNames(ids.concat(msgs.map(m => m.user_id)));
   if (route().v !== 'chat') return;
   const hidden = u => S.blocked.includes(u);
-  const bubble = m => hidden(m.user_id) ? '' : /^Match gefunden!/.test(m.body) ? `<div class="sys">${esc(m.body)}</div>` : m.user_id === api.uid() ? `<div class="m me">${esc(m.body)}</div>` : `<div class="m"><small>${esc(nameOf(m.user_id))}</small>${esc(m.body)}</div>`;
+  const bubble = m => hidden(m.user_id) ? '' : (/^Match gefunden!/.test(m.body) || /^👋 .{1,40} ist beigetreten$/u.test(m.body)) ? `<div class="sys">${esc(m.body)}</div>` : m.user_id === api.uid() ? `<div class="m me">${esc(m.body)}</div>` : `<div class="m"><small>${esc(nameOf(m.user_id))}</small>${esc(m.body)}</div>`;
   a.innerHTML = `<div class="top"><button class="ib" id="bk" aria-label="Zurück">${I(P.back, 22)}</button><a class="sp" href="#/${p.is_lobby ? 'chat' : 'plan'}/${p.id}" style="min-width:0;text-decoration:none;color:inherit"><b style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.title)}</b><span class="mut" style="font-size:12px">${ids.length} im Chat${p.is_lobby ? ' · Lobby' : ''}</span></a><button class="ib" id="rep" aria-label="Melden">${I(P.flag, 20)}</button></div>
   ${p.is_lobby ? `<div class="card v row" style="gap:10px;font-size:14px">${I(P.pad, 22, '#C4B5FD')}<span>Tauscht eure Spielernamen und ladet euch in <b>${esc(p.game || 'eurem Spiel')}</b> ein. Gezockt wird im Spiel selbst.</span></div><div style="height:8px"></div>` : ''}
   <div class="card o row" style="gap:10px;font-size:13px">${I(P.shield, 20, '#FCD34D')}<span>Teile keine Adresse oder Handynummer. Trefft euch nur an öffentlichen Orten.</span></div>
@@ -311,20 +326,22 @@ async function chat(id) {
   $('#rep').onclick = () => memberSheet(p, ids);
   const scroll = () => window.scrollTo(0, document.body.scrollHeight);
   scroll();
+  let mrT; const markRead = () => { clearTimeout(mrT); mrT = setTimeout(async () => { try { await api.markRead(id); delete S.unread[id]; refreshUnread(); } catch (e) { } }, 400); };
+  markRead();
   const seen = new Set(msgs.map(m => m.id));
   S.unsub = api.subscribe(id, async m => {
     if (seen.has(m.id)) return; seen.add(m.id);
     await loadNames([m.user_id]);
     const box = $('#msgs'); if (!box) return;
-    const sys = box.querySelector('.sys'); if (sys) sys.remove();
-    box.insertAdjacentHTML('beforeend', bubble(m)); scroll();
+    const sys = box.querySelector('.sys'); if (sys && /Sag Hallo/.test(sys.textContent)) sys.remove();
+    box.insertAdjacentHTML('beforeend', bubble(m)); scroll(); markRead();
   }, null);
   // Falls Live-Updates mal hängen: alle 8 Sekunden nachladen
   const refresh = async () => {
     try {
       const fresh = await api.messages(id); await loadNames(fresh.map(m => m.user_id));
       const box = $('#msgs'); if (!box) return;
-      fresh.filter(m => !seen.has(m.id)).forEach(m => { seen.add(m.id); const sys = box.querySelector('.sys'); if (sys) sys.remove(); box.insertAdjacentHTML('beforeend', bubble(m)); scroll(); });
+      const nw = fresh.filter(m => !seen.has(m.id)); nw.forEach(m => { seen.add(m.id); const sys = box.querySelector('.sys'); if (sys && /Sag Hallo/.test(sys.textContent)) sys.remove(); box.insertAdjacentHTML('beforeend', bubble(m)); scroll(); }); if (nw.length) markRead();
     } catch (e) { }
   };
   const poll = setInterval(refresh, 8000);

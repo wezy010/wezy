@@ -81,6 +81,10 @@
       return () => sb.removeChannel(ch);
     },
 
+    // ---------- Benachrichtigungen ----------
+    async unread() { return T(await sb.rpc('my_unread')) || []; },
+    async markRead(planId) { T(await sb.rpc('mark_read', { p: planId })); },
+
     // ---------- Quick Match ----------
     async enterQueue(game, mode, mic, lang) { return T(await sb.rpc('enter_queue', { g: game, m: mode, mic_on: mic, l: lang })); },
     async queueStatus() { const r = T(await sb.from('queue').select('matched_plan').maybeSingle()); return r ? r.matched_plan : null; },
